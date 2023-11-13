@@ -2323,6 +2323,66 @@ static inline __m128i get_scale_shuffle(int i) {
 }
 #endif
 
+
+void ggml_vec_dot_q4_0_f32(int n, float * restrict s, const void * restrict vx, const float * restrict y) {
+// #ifdef GGML_SIMD
+//     float sumf = 0.0f;
+//     const int np = (n & ~(GGML_F32_STEP - 1));
+
+//     GGML_F32_VEC sum[GGML_F32_ARR] = { GGML_F32_VEC_ZERO };
+
+//     GGML_F32_VEC ax[GGML_F32_ARR];
+//     GGML_F32_VEC ay[GGML_F32_ARR];
+
+//     for (int i = 0; i < np; i += GGML_F32_STEP) {
+//         for (int j = 0; j < GGML_F32_ARR; j++) {
+//             ax[j] = GGML_F32_VEC_LOAD(x + i + j*GGML_F32_EPR);
+//             ay[j] = GGML_F32_VEC_LOAD(y + i + j*GGML_F32_EPR);
+
+//             sum[j] = GGML_F32_VEC_FMA(sum[j], ax[j], ay[j]);
+//         }
+//     }
+
+//     // reduce sum0..sum3 to sum0
+//     GGML_F32_VEC_REDUCE(sumf, sum);
+
+//     // leftovers
+//     for (int i = np; i < n; ++i) {
+//         sumf += x[i]*y[i];
+//     }
+// #else
+
+    // scalar
+    const int qk = QK8_0;
+    const int nb = n / qk;
+    float sumf = 0.0;
+
+    assert(n % qk == 0);
+
+    const block_q4_0 * restrict x = vx;
+
+    for (int i = 0; i < nb; i++) {
+        float sumi = 0;
+
+        for (int j = 0; j < qk/2; ++j) {
+            const int v0 = (x[i].qs[j] & 0x0F) - 8;
+            const int v1 = (x[i].qs[j] >>   4) - 8;
+
+            sumi += (v0 * y[i*qk + j]) + (v1 * y[i*qk + j + qk/2]); //(v1 * y[i].qs[j + qk/2]);
+        }
+
+        sumf += sumi*GGML_FP16_TO_FP32(x[i].d);
+    }
+
+    // // scalar
+    // for (int i = 0; i < n; ++i) {
+    //     sumf += (ggml_float)(x[i]*y[i]);
+    // }
+// #endif
+
+    *s = sumf;
+}
+
 void ggml_vec_dot_q4_0_q8_0(int n, float * restrict s, const void * restrict vx, const void * restrict vy) {
     const int qk = QK8_0;
     const int nb = n / qk;
