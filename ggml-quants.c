@@ -132,8 +132,8 @@ static inline __m256 mul_sum_us8_pairs_float(const __m256i ax, const __m256i sy)
 #endif
 }
 
-// multiply int8_t, add results pairwise twice and return as float vector
 static inline __m256 mul_sum_i8_pairs_float(const __m256i x, const __m256i y) {
+// multiply int8_t, add results pairwise twice and return as float vector
 #if __AVXVNNIINT8__
     const __m256i zero = _mm256_setzero_si256();
     const __m256i summed_pairs = _mm256_dpbssd_epi32(zero, x, y);
@@ -2417,6 +2417,102 @@ static inline __m128i get_scale_shuffle(int i) {
     return _mm_loadu_si128((const __m128i*)k_shuffle + i);
 }
 #endif
+
+static inline float __avx2_reduce_sum(__m256 x) {             
+    const __m128 t0 = _mm_add_ps(_mm256_castps256_ps128(x),    
+                                 _mm256_extractf128_ps(x, 1)); 
+    const __m128 t1 = _mm_hadd_ps(t0, t0);                        
+    return _mm_cvtss_f32(_mm_hadd_ps(t1, t1));                     
+}
+
+static inline void float_from_nibbles_32(const uint8_t * rsi, __m256* res, size_t step) {
+    // Load 16 bytes from memory
+    const __m128i lowMask = _mm_set1_epi32(0xF);
+    const __m128i off = _mm_set1_epi32(8);
+    const __m128i shuffle_mask = _mm_set_epi8(15,14,13,3,11,10,9,2,7,6,5,1,12,8,4,0);
+
+    for (int i = 0; i < 2; i++) {
+        __m128i tmpl1 = _mm_loadu_si128((const __m128i*)(rsi + 2*i*step));
+        tmpl1 = _mm_shuffle_epi8(tmpl1, shuffle_mask);
+        __m128i tmph1 = _mm_srli_epi32(tmpl1, 4);
+        
+        tmpl1 = _mm_and_si128(lowMask, tmpl1);
+        tmpl1 = _mm_sub_epi32(tmpl1, off);
+        tmph1 = _mm_and_si128(lowMask, tmph1);
+        tmph1 = _mm_sub_epi32(tmph1, off);
+
+        __m128i tmpl2 = _mm_loadu_si128((const __m128i*)(rsi + (2*i+1)*step));
+        tmpl2 = _mm_shuffle_epi8(tmpl2, shuffle_mask);
+        __m128i tmph2 = _mm_srli_epi32(tmpl2, 4);
+        
+        tmpl2 = _mm_and_si128(lowMask, tmpl2);
+        tmpl2 = _mm_sub_epi32(tmpl2, off);
+        tmph2 = _mm_and_si128(lowMask, tmph2);
+        tmph2 = _mm_sub_epi32(tmph2, off);
+
+        *(res+i) = _mm256_cvtepi32_ps(_mm256_insertf128_si256(_mm256_castsi128_si256(tmpl1), (tmpl2), 1));
+        *(res+i+2) = _mm256_cvtepi32_ps(_mm256_insertf128_si256(_mm256_castsi128_si256(tmph1), (tmph2), 1));
+    }
+}
+
+void ggml_vec_dot_q4_0_f32(int n, float * restrict s, const void * restrict vx, const float * restrict y) {
+#ifdef __AVX2__
+    #define GGML_F32_STEP 32
+    #define GGML_F32_EPR  8
+    #define GGML_F32_ARR 4
+    const int qk = QK8_0; // nk == GGML_F32_STEP luckily
+    const int nb = n / qk;
+    float sumf = 0.0f;
+    float isumf = 0.0f;
+    __m256 ax[GGML_F32_ARR];
+    __m256 ay;
+    __m256 acc;
+    const block_q4_0 * restrict x = vx;
+
+    // Main loop
+    for (int i = 0; i < nb; ++i) {
+        isumf = 0.0f;
+        /* Compute combined scale for the block */
+        float_from_nibbles_32(x[i].qs, ax, GGML_F32_ARR);
+
+        acc = _mm256_setzero_ps();
+        for (int j = 0; j < GGML_F32_ARR; j++) {
+            ay = _mm256_loadu_ps(y + i*qk + j*GGML_F32_EPR);
+            acc = _mm256_fmadd_ps(ax[j], ay, acc);
+        }
+       
+        isumf = __avx2_reduce_sum(acc); 
+        sumf += isumf * GGML_FP16_TO_FP32(x[i].d);
+    }
+
+#else
+
+    // scalar
+    const int qk = QK8_0;
+    const int nb = n / qk;
+    float sumf = 0.0;
+
+    assert(n % qk == 0);
+
+    const block_q4_0 * restrict x = vx;
+
+    for (int i = 0; i < nb; i++) {
+        float sumi = 0;
+
+        for (int j = 0; j < qk/2; ++j) {
+            const int v0 = (x[i].qs[j] & 0x0F) - 8;
+            const int v1 = (x[i].qs[j] >>   4) - 8;
+
+            sumi += (v0 * y[i*qk + j]) + (v1 * y[i*qk + j + qk/2]); //(v1 * y[i].qs[j + qk/2]);
+        }
+
+        sumf += sumi*GGML_FP16_TO_FP32(x[i].d);
+    }
+
+#endif
+
+    *s = sumf;
+}
 
 void ggml_vec_dot_q4_0_q8_0(int n, float * restrict s, const void * restrict vx, const void * restrict vy) {
     const int qk = QK8_0;
