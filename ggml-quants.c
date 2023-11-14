@@ -149,8 +149,8 @@ static inline __m256 mul_sum_us8_pairs_float(const __m256i ax, const __m256i sy)
 #endif
 }
 
-// multiply int8_t, add results pairwise twice and return as float vector
 static inline __m256 mul_sum_i8_pairs_float(const __m256i x, const __m256i y) {
+// multiply int8_t, add results pairwise twice and return as float vector
 #if __AVXVNNIINT8__
     const __m256i zero = _mm256_setzero_si256();
     const __m256i summed_pairs = _mm256_dpbssd_epi32(zero, x, y);
@@ -2369,6 +2369,17 @@ static inline float __avx2_reduce_sum(__m256 x) {
     return _mm_cvtss_f32(_mm_hadd_ps(t1, t1));                     
 }
 
+static inline void float_from_nibbles_32(const uint8_t * rsi, __m256* res)
+{
+    // Load 16 bytes from memory
+    __m128i tmpl = _mm_loadu_si128((const __m128i *)rsi);
+    __m128i tmph = _mm_srli_epi32(tmpl, 4);
+    const __m128i lowMask = _mm_set1_epi32(0xF);
+    tmpl = _mm_and_si128(lowMask, tmpl);
+    tmph = _mm_and_si128(lowMask, tmph);
+    *res = MM256_SET_M128I(tmph, tmpl);
+}
+
 void ggml_vec_dot_q4_0_f32(int n, float * restrict s, const void * restrict vx, const float * restrict y) {
 #ifdef __AVX2__
     // float sumf = 0.0f;
@@ -2415,6 +2426,7 @@ void ggml_vec_dot_q4_0_f32(int n, float * restrict s, const void * restrict vx, 
     const block_q4_0 * restrict x = vx;
 
     // Main loop
+    // Main loop
     for (int i = 0; i < nb; ++i) {
         isumf = 0.0f;
         /* Compute combined scale for the block */
@@ -2423,17 +2435,28 @@ void ggml_vec_dot_q4_0_f32(int n, float * restrict s, const void * restrict vx, 
         __m256i bx = bytes_from_nibbles_32(x[i].qs);
 
         // Now we have a vector with bytes in [ 0 .. 15 ] interval. Offset them into [ -8 .. +7 ] interval
-        //const __m256i off = _mm256_set1_epi8( 8 ); Don't subtract since use lookup for conversion
-        //bx = _mm256_sub_epi8( bx, off );
-        _mm256_store_si256(w_i8, bx);
+        const __m256i off = _mm256_set1_epi8( 8 ); //Don't subtract since use lookup for conversion
+        bx = _mm256_sub_epi8(bx, off);
+        //_mm256_store_si256(w_i8, bx);
 
         acc = _mm256_setzero_ps();
-        for (int j = 0; j < GGML_F32_ARR; j++) {
-            ax = __avx2_u4x4_load(w_i8 + j*GGML_F32_EPR); //GGML_F32_VEC_LOAD(x + i + j*GGML_F32_EPR);
-            ay = _mm256_loadu_ps(y + i*qk + j*GGML_F32_EPR);
+        // for (int j = 0; j < GGML_F32_ARR; j++) {
+        //     //ax = __avx2_u4x4_load(w_i8 + j*GGML_F32_EPR); //GGML_F32_VEC_LOAD(x + i + j*GGML_F32_EPR);
+        //     ax = _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(bx));
+        //     ay = _mm256_loadu_ps(y + i*qk + j*GGML_F32_EPR);
 
-            acc = _mm256_fmadd_ps(ax, ay, acc); //_mm256_add_ps(_mm256_mul_ps(ax[j], ay[j]), sum[j])
-        }
+        //     acc = _mm256_fmadd_ps(ax, ay, acc); //_mm256_add_ps(_mm256_mul_ps(ax[j], ay[j]), sum[j])
+        // }
+
+        ax_pair = _mm256_castsi256_si128(bx);
+        ax = _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(ax_pair));
+        ay = _mm256_loadu_ps(y + i*qk);
+        acc = _mm256_fmadd_ps(ax, ay, acc);
+
+        ax = _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm128_ ax_pair));
+        ay = _mm256_loadu_ps(y + i*qk + GGML_F32_EPR);
+
+        acc = _mm256_fmadd_ps(ax, ay, acc); //_mm256_add_ps(_mm256_mul_ps(ax[j], ay[j]), sum[j])
 
         //__m256i by = _mm256_loadu_si256((const __m256i *)y[i].qs);
 
