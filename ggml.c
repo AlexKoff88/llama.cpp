@@ -11556,7 +11556,6 @@ static void gemm_f16_out_f32(int64_t m, int64_t n, int64_t k,
     //     // blck_1 = blck_0;
     // }
     // // printf("%zd %zd %zd %zd\n", blck_size, K, blck_0, blck_1);
-    fprintf(stderr, "gemm f16 out f32");
 
     for (int j = n0; j < n1; j+=blck_n) {
         for (int i = m0; i < m1; i+=blck_m) {
@@ -12910,7 +12909,6 @@ static void ggml_compute_forward_flash_attn_f16(
         }
 
         // scale
-        fprintf(stderr, "sacel %f", scale);
         ggml_vec_scale_f32(nek1, S, scale);
 
         if (masked) {
@@ -13145,7 +13143,6 @@ static void ggml_compute_forward_flash_ff_f16(
         ggml_vec_add_f32(neb01, S, S, (float *) b1->data);
         //ggml_vec_gelu_f32(neb01, S, S);
 
-        fprintf(stderr, "scale to F16");
         ggml_fp16_t * S16 = (ggml_fp16_t *) ((float *) params->wdata + ith*(2*M + CACHE_LINE_SIZE_F32) + M);
 
         for (int64_t i = 0; i < M; i++) {
