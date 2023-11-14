@@ -2382,9 +2382,12 @@ static inline void float_from_nibbles_32(const uint8_t * rsi, __m256* res, size_
     // Load 16 bytes from memory
     const __m128i lowMask = _mm_set1_epi32(0xF);
     const __m128i off = _mm_set1_epi32(8);
+    const __m128i shuffle_mask = _mm_set_epi8(15,14,13,3,11,10,9,2,7,6,5,1,12,8,4,0);
+    //const __m128i shuffle_mask = _mm_set_epi8(2,14,13,12,1,10,9,8,0,6,5,4,15,11,7,3);
 
     for (int i = 0; i < 2; i++) {
-        __m128i tmpl1 = _mm_loadu_si128((const __m128i *)(rsi + 2*i*step));
+        __m128i tmpl1 = _mm_loadu_si128((const __m128i*)(rsi + 2*i*step));
+        tmpl1 = _mm_shuffle_epi8(tmpl1, shuffle_mask);
         __m128i tmph1 = _mm_srli_epi32(tmpl1, 4);
         
         tmpl1 = _mm_and_si128(lowMask, tmpl1);
@@ -2392,7 +2395,8 @@ static inline void float_from_nibbles_32(const uint8_t * rsi, __m256* res, size_
         tmph1 = _mm_and_si128(lowMask, tmph1);
         tmph1 = _mm_sub_epi32(tmph1, off);
 
-        __m128i tmpl2 = _mm_loadu_si128((const __m128i *)(rsi + (2*i+1)*step));
+        __m128i tmpl2 = _mm_loadu_si128((const __m128i*)(rsi + (2*i+1)*step));
+        tmpl2 = _mm_shuffle_epi8(tmpl2, shuffle_mask);
         __m128i tmph2 = _mm_srli_epi32(tmpl2, 4);
         
         tmpl2 = _mm_and_si128(lowMask, tmpl2);
@@ -2400,8 +2404,8 @@ static inline void float_from_nibbles_32(const uint8_t * rsi, __m256* res, size_
         tmph2 = _mm_and_si128(lowMask, tmph2);
         tmph2 = _mm_sub_epi32(tmph2, off);
 
-        *(res+i) = _mm256_cvtepi32_ps(_mm256_insertf128_si256(_mm256_castsi128_si256(tmpl2), (tmpl1), 1));
-        *(res+i+2) = _mm256_cvtepi32_ps(_mm256_insertf128_si256(_mm256_castsi128_si256(tmph2), (tmph1), 1));
+        *(res+i) = _mm256_cvtepi32_ps(_mm256_insertf128_si256(_mm256_castsi128_si256(tmpl1), (tmpl2), 1));
+        *(res+i+2) = _mm256_cvtepi32_ps(_mm256_insertf128_si256(_mm256_castsi128_si256(tmph1), (tmph2), 1));
     }
 }
 
