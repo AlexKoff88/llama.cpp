@@ -2323,45 +2323,6 @@ static inline __m128i get_scale_shuffle(int i) {
 }
 #endif
 
-static float U4_TO_FLOAT_TABLE[] = {
-    -8.f, -7.f, -6.f, -5.f, -4.f, -3.f, -2.f, -1.f, 
-    0.f,1.f, 2.f, 3.f, 4.f, 5.f, 6.f, 7.f                        
-};
-
-static inline __m256 __avx2_u4x4_load(char *x) {
-    float tmp[8];
-
-    tmp[0] = U4_TO_FLOAT_TABLE[x[0]];
-    tmp[1] = U4_TO_FLOAT_TABLE[x[1]];
-    tmp[2] = U4_TO_FLOAT_TABLE[x[2]];
-    tmp[3] = U4_TO_FLOAT_TABLE[x[3]];
-    tmp[4] = U4_TO_FLOAT_TABLE[x[4]];
-    tmp[5] = U4_TO_FLOAT_TABLE[x[5]];
-    tmp[6] = U4_TO_FLOAT_TABLE[x[6]];
-    tmp[7] = U4_TO_FLOAT_TABLE[x[7]];
-
-    return _mm256_loadu_ps(tmp);
-}
-
-static inline void __avx2_vec_reduce(float* res, __m256* x) {
-    int offset = 4 >> 1;                               
-    for (int i = 0; i < offset; ++i) {                            
-        x[i] = _mm256_add_ps(x[i], x[offset+i]);                  
-    }                                                             
-    offset >>= 1;                                                 
-    for (int i = 0; i < offset; ++i) {                            
-        x[i] = _mm256_add_ps(x[i], x[offset+i]);                  
-    }                                                             
-    offset >>= 1;                                                 
-    for (int i = 0; i < offset; ++i) {                            
-        x[i] = _mm256_add_ps(x[i], x[offset+i]);                  
-    }                                                             
-    const __m128 t0 = _mm_add_ps(_mm256_castps256_ps128(x[0]),    
-                                 _mm256_extractf128_ps(x[0], 1)); 
-    const __m128 t1 = _mm_hadd_ps(t0, t0);                        
-    *res = _mm_cvtss_f32(_mm_hadd_ps(t1, t1));                     
-}
-
 static inline float __avx2_reduce_sum(__m256 x) {             
     const __m128 t0 = _mm_add_ps(_mm256_castps256_ps128(x),    
                                  _mm256_extractf128_ps(x, 1)); 
@@ -2369,21 +2330,11 @@ static inline float __avx2_reduce_sum(__m256 x) {
     return _mm_cvtss_f32(_mm_hadd_ps(t1, t1));                     
 }
 
-
-// static inline __m256i bytes_from_nibbles_32(const uint8_t * rsi)
-// {
-//     const __m128i tmp = _mm_loadu_si128((const __m128i *)rsi);
-//     const __m256i bytes = MM256_SET_M128I(_mm_srli_epi16(tmp, 4), tmp);
-//     const __m256i lowMask = _mm256_set1_epi8( 0xF );
-//     return _mm256_and_si256(lowMask, bytes);
-// }
-
 static inline void float_from_nibbles_32(const uint8_t * rsi, __m256* res, size_t step) {
     // Load 16 bytes from memory
     const __m128i lowMask = _mm_set1_epi32(0xF);
     const __m128i off = _mm_set1_epi32(8);
     const __m128i shuffle_mask = _mm_set_epi8(15,14,13,3,11,10,9,2,7,6,5,1,12,8,4,0);
-    //const __m128i shuffle_mask = _mm_set_epi8(2,14,13,12,1,10,9,8,0,6,5,4,15,11,7,3);
 
     for (int i = 0; i < 2; i++) {
         __m128i tmpl1 = _mm_loadu_si128((const __m128i*)(rsi + 2*i*step));
@@ -2411,33 +2362,6 @@ static inline void float_from_nibbles_32(const uint8_t * rsi, __m256* res, size_
 
 void ggml_vec_dot_q4_0_f32(int n, float * restrict s, const void * restrict vx, const float * restrict y) {
 #ifdef __AVX2__
-    // float sumf = 0.0f;
-    // const int np = (n & ~(GGML_F32_STEP - 1));
-
-    // GGML_F32_VEC sum[GGML_F32_ARR] = { GGML_F32_VEC_ZERO };
-
-    // GGML_F32_VEC ax[GGML_F32_ARR];
-    // GGML_F32_VEC ay[GGML_F32_ARR];
-
-    // for (int i = 0; i < np; i += GGML_F32_STEP) {
-    //     for (int j = 0; j < GGML_F32_ARR; j++) {
-    //         ax[j] = GGML_F32_VEC_LOAD(x + i + j*GGML_F32_EPR);
-    //         ay[j] = GGML_F32_VEC_LOAD(y + i + j*GGML_F32_EPR);
-
-    //         sum[j] = GGML_F32_VEC_FMA(sum[j], ax[j], ay[j]);
-    //     }
-    // }
-
-    // // reduce sum0..sum3 to sum0
-    // GGML_F32_VEC_REDUCE(sumf, sum);
-
-    // // leftovers
-    // for (int i = np; i < n; ++i) {
-    //     sumf += x[i]*y[i];
-    // }
-    
-
-
     #define GGML_F32_STEP 32
     #define GGML_F32_EPR  8
     #define GGML_F32_ARR 4
@@ -2445,67 +2369,27 @@ void ggml_vec_dot_q4_0_f32(int n, float * restrict s, const void * restrict vx, 
     const int nb = n / qk;
     float sumf = 0.0f;
     float isumf = 0.0f;
-    //__m256 sum[GGML_F32_ARR] = { _mm256_setzero_ps() };
     __m256 ax[GGML_F32_ARR];
-
-    //__m256 ax;
-    //char w_i8[QK8_0];
     __m256 ay;
-    // Initialize accumulator with zeros
     __m256 acc;
     const block_q4_0 * restrict x = vx;
 
     // Main loop
-    // Main loop
     for (int i = 0; i < nb; ++i) {
         isumf = 0.0f;
         /* Compute combined scale for the block */
-        //const __m256 d = _mm256_set1_ps( GGML_FP16_TO_FP32(x[i].d) );
-
-        //__m256i bx = bytes_from_nibbles_32(x[i].qs);
         float_from_nibbles_32(x[i].qs, ax, GGML_F32_ARR);
-
-        // Now we have a vector with bytes in [ 0 .. 15 ] interval. Offset them into [ -8 .. +7 ] interval
-        //const __m256i off = _mm256_set1_epi8( 8 ); //Don't subtract since use lookup for conversion
-        //bx = _mm256_sub_epi8(bx, off);
-        //_mm256_store_si256(w_i8, bx);
 
         acc = _mm256_setzero_ps();
         for (int j = 0; j < GGML_F32_ARR; j++) {
             ay = _mm256_loadu_ps(y + i*qk + j*GGML_F32_EPR);
             acc = _mm256_fmadd_ps(ax[j], ay, acc);
         }
-        // for (int j = 0; j < GGML_F32_ARR; j++) {
-        //     //ax = __avx2_u4x4_load(w_i8 + j*GGML_F32_EPR); //GGML_F32_VEC_LOAD(x + i + j*GGML_F32_EPR);
-        //     ax = _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(bx));
-        //     ay = _mm256_loadu_ps(y + i*qk + j*GGML_F32_EPR);
-
-        //     acc = _mm256_fmadd_ps(ax, ay, acc); //_mm256_add_ps(_mm256_mul_ps(ax[j], ay[j]), sum[j])
-        // }
-
-        // ax_pair = _mm256_castsi256_si128(bx);
-        // ax = _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(ax_pair));
-        // ay = _mm256_loadu_ps(y + i*qk);
-        // acc = _mm256_fmadd_ps(ax, ay, acc);
-
-        // ax = _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm128_ ax_pair));
-        // ay = _mm256_loadu_ps(y + i*qk + GGML_F32_EPR);
-
-        // acc = _mm256_fmadd_ps(ax, ay, acc); //_mm256_add_ps(_mm256_mul_ps(ax[j], ay[j]), sum[j])
-
-        //__m256i by = _mm256_loadu_si256((const __m256i *)y[i].qs);
-
-        //const __m256 q = mul_sum_i8_pairs_float(bx, by);
-
-        /* Multiply q with scale and accumulate */
-
-        // TODO: reduce sum correctly
+       
         isumf = __avx2_reduce_sum(acc); 
-        //acc = _mm256_fmadd_ps( d, q, acc );
         sumf += isumf * GGML_FP16_TO_FP32(x[i].d);
     }
 
-    *s = sumf;
 #else
 
     // scalar
@@ -2530,10 +2414,6 @@ void ggml_vec_dot_q4_0_f32(int n, float * restrict s, const void * restrict vx, 
         sumf += sumi*GGML_FP16_TO_FP32(x[i].d);
     }
 
-    // // scalar
-    // for (int i = 0; i < n; ++i) {
-    //     sumf += (ggml_float)(x[i]*y[i]);
-    // }
 #endif
 
     *s = sumf;
